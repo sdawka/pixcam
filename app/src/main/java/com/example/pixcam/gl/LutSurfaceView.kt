@@ -41,6 +41,11 @@ class LutSurfaceView(context: Context) : GLSurfaceView(context) {
 
     fun setLut(lut: CubeLut?) = renderer.setLut(lut)
 
+    /** Apply the app's own display grade (Hable filmic + sRGB OETF) to the incoming
+     *  frames. Only correct when the camera preview is being fed a LINEAR tone curve —
+     *  the integrator guarantees that. Callable from any thread, takes effect next frame. */
+    fun setGrade(enabled: Boolean) = renderer.setGrade(enabled)
+
     private class LutRenderer(private val view: LutSurfaceView) : GLSurfaceView.Renderer,
         SurfaceTexture.OnFrameAvailableListener {
 
@@ -56,6 +61,7 @@ class LutSurfaceView(context: Context) : GLSurfaceView(context) {
         private var uUseLutLoc = 0
         private var uLutScaleLoc = 0
         private var uLutOffsetLoc = 0
+        private var uGradeLoc = 0
         private var aPositionLoc = 0
         private var aTexCoordLoc = 0
 
@@ -71,6 +77,11 @@ class LutSurfaceView(context: Context) : GLSurfaceView(context) {
         private var currentLutSize = 0
         private var useLut = false
 
+        // Set from any thread; read as a plain volatile in onDrawFrame each frame, so it
+        // survives EGL context recreation for free (this field lives on the renderer, not
+        // in GL state).
+        @Volatile private var gradeEnabled = false
+
         fun setBufferSize(width: Int, height: Int) {
             pendingWidth = width
             pendingHeight = height
@@ -81,6 +92,11 @@ class LutSurfaceView(context: Context) : GLSurfaceView(context) {
         fun setLut(lut: CubeLut?) {
             pendingLut.set(lut)
             view.queueEvent { uploadPendingLutIfAny() }
+        }
+
+        fun setGrade(enabled: Boolean) {
+            gradeEnabled = enabled
+            view.requestRender()
         }
 
         override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
@@ -98,6 +114,7 @@ class LutSurfaceView(context: Context) : GLSurfaceView(context) {
             uUseLutLoc = GLES30.glGetUniformLocation(program, "uUseLut")
             uLutScaleLoc = GLES30.glGetUniformLocation(program, "uLutScale")
             uLutOffsetLoc = GLES30.glGetUniformLocation(program, "uLutOffset")
+            uGradeLoc = GLES30.glGetUniformLocation(program, "uGrade")
 
             cameraTexId = createOesTexture()
             lutTexId = createLutTexturePlaceholder()
@@ -153,6 +170,7 @@ class LutSurfaceView(context: Context) : GLSurfaceView(context) {
             GLES30.glUniform1i(uLutLoc, 1)
 
             GLES30.glUniformMatrix4fv(uTexMatrixLoc, 1, false, texMatrix, 0)
+            GLES30.glUniform1f(uGradeLoc, if (gradeEnabled) 1f else 0f)
             GLES30.glUniform1f(uUseLutLoc, if (useLut) 1f else 0f)
             if (useLut && currentLutSize > 0) {
                 val scale = (currentLutSize - 1).toFloat() / currentLutSize.toFloat()
@@ -301,10 +319,31 @@ class LutSurfaceView(context: Context) : GLSurfaceView(context) {
                 uniform float uUseLut;
                 uniform float uLutScale;
                 uniform float uLutOffset;
+                uniform float uGrade;
                 in vec2 vTexCoord;
                 out vec4 fragColor;
+
+                float hable(float x) {
+                    const float A = 0.15; const float B = 0.50; const float C = 0.10;
+                    const float D = 0.20; const float E = 0.02; const float F = 0.30;
+                    return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
+                }
+                vec3 hable(vec3 x) {
+                    return vec3(hable(x.r), hable(x.g), hable(x.b));
+                }
+                float srgbOetf(float x) {
+                    return x <= 0.0031308 ? 12.92 * x : 1.055 * pow(x, 1.0 / 2.4) - 0.055;
+                }
+                vec3 srgbOetf(vec3 x) {
+                    return vec3(srgbOetf(x.r), srgbOetf(x.g), srgbOetf(x.b));
+                }
+
                 void main() {
                     vec3 color = texture(uCamera, vTexCoord).rgb;
+                    if (uGrade > 0.5) {
+                        float hableWhite = hable(1.0);
+                        color = srgbOetf(clamp(hable(color) / hableWhite, 0.0, 1.0));
+                    }
                     if (uUseLut > 0.5) {
                         vec3 coord = color * uLutScale + uLutOffset;
                         color = texture(uLut, coord).rgb;

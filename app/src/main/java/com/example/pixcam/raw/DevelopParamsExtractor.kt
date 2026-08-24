@@ -54,8 +54,19 @@ object DevelopParamsExtractor {
             )?.toFloat() ?: 1023f
 
         val blackLevel = extractBlackLevel(characteristics, result)
-        val wbGains = extractWbGains(characteristics, result, posToChannel)
-        val ccm = extractCcm(result)
+        // our own DNG-matrix color science first; the HAL's per-shot color as fallback
+        val own = ownColor(characteristics, result)
+        val wbGains: FloatArray
+        val ccm: FloatArray
+        if (own != null) {
+            // camera R,G,B -> channel order (greens duplicated) -> position order
+            val ch = floatArrayOf(own.wbGains[0], own.wbGains[1], own.wbGains[1], own.wbGains[2])
+            wbGains = FloatArray(4) { pos -> ch[posToChannel[pos]] }
+            ccm = own.ccm
+        } else {
+            wbGains = extractWbGains(characteristics, result, posToChannel)
+            ccm = extractCcm(result)
+        }
         val (shadingMap, shadingRows, shadingCols) = extractShadingMap(result, posToChannel)
 
         return DevelopParams(
@@ -70,6 +81,49 @@ object DevelopParamsExtractor {
             shadingRows = shadingRows,
             shadingCols = shadingCols,
         )
+    }
+
+    private fun ownColor(
+        characteristics: CameraCharacteristics,
+        result: TotalCaptureResult,
+    ): ColorScience.Result? {
+        val neutral = result.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT) ?: return null
+        val ill1 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1) ?: return null
+        val cm1 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)?.toRowMajor() ?: return null
+        val fm1 = characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)?.toRowMajor() ?: return null
+        val ill2 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt()
+        val cm2 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)?.toRowMajor()
+        val fm2 = characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)?.toRowMajor()
+        val hasPair2 = ill2 != null && cm2 != null && fm2 != null
+        // the neutral point is only defined up to scale, and some HALs (the emulator)
+        // report it in raw counts rather than <=1 — normalize so max component = 1
+        val n = floatArrayOf(neutral[0].toFloat(), neutral[1].toFloat(), neutral[2].toFloat())
+        val maxN = maxOf(n[0], n[1], n[2])
+        if (maxN <= 0f) return null
+        val own = ColorScience.compute(
+            ill1, cm1, fm1,
+            if (hasPair2) ill2 else null,
+            if (hasPair2) cm2 else null,
+            if (hasPair2) fm2 else null,
+            FloatArray(3) { n[it] / maxN },
+        )
+        if (own != null) {
+            Log.i(TAG, "own color science: ~${own.cct.toInt()}K")
+        } else {
+            Log.w(TAG, "own color science failed; falling back to HAL color")
+        }
+        return own
+    }
+
+    private fun ColorSpaceTransform.toRowMajor(): FloatArray {
+        // getElement takes (column, row); output is row-major.
+        val m = FloatArray(9)
+        for (row in 0 until 3) {
+            for (col in 0 until 3) {
+                m[row * 3 + col] = getElement(col, row).toFloat()
+            }
+        }
+        return m
     }
 
     private fun extractBlackLevel(
@@ -123,14 +177,7 @@ object DevelopParamsExtractor {
                 0f, 0f, 1f,
             )
         }
-        // getElement takes (column, row); output is row-major.
-        val m = FloatArray(9)
-        for (row in 0 until 3) {
-            for (col in 0 until 3) {
-                m[row * 3 + col] = transform.getElement(col, row).toFloat()
-            }
-        }
-        return m
+        return transform.toRowMajor()
     }
 
     private fun extractShadingMap(

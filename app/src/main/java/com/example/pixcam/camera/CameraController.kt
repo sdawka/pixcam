@@ -52,6 +52,8 @@ data class ManualControls(
     val exposureCompensation: Int = 0,
     val aeLock: Boolean = false,
     val toneCurve: ToneCurve = ToneCurve.DEVICE,
+    // WYSIWYG viewfinder: LINEAR curve to the preview stream, our filmic grade in GL
+    val grade: Boolean = false,
 )
 
 data class CameraInfo(
@@ -232,7 +234,7 @@ class CameraController(private val context: Context) {
         val surface = previewSurface ?: return
         val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
             addTarget(surface)
-            applyControls(this)
+            applyControls(this, forPreview = true)
         }
         try {
             session?.setRepeatingRequest(request.build(), null, handler)
@@ -250,7 +252,7 @@ class CameraController(private val context: Context) {
     }
 
     /** The honest-pipeline defaults: kill everything the HAL lets us kill. */
-    private fun applyControls(b: CaptureRequest.Builder) {
+    private fun applyControls(b: CaptureRequest.Builder, forPreview: Boolean = false) {
         setIfSupported(b, CaptureRequest.NOISE_REDUCTION_MODE,
             CameraMetadata.NOISE_REDUCTION_MODE_OFF,
             characteristics.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES))
@@ -280,7 +282,12 @@ class CameraController(private val context: Context) {
         } else {
             b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
         }
-        if (c.toneCurve != ToneCurve.DEVICE && info.toneCurveSupported) {
+        if (forPreview && c.grade && info.toneCurveSupported) {
+            // graded viewfinder: HAL hands us linear light, the GL shader applies our filmic
+            val pts = buildCurve(ToneCurve.LINEAR)
+            b.set(CaptureRequest.TONEMAP_MODE, CameraMetadata.TONEMAP_MODE_CONTRAST_CURVE)
+            b.set(CaptureRequest.TONEMAP_CURVE, TonemapCurve(pts, pts, pts))
+        } else if (c.toneCurve != ToneCurve.DEVICE && info.toneCurveSupported) {
             val pts = buildCurve(c.toneCurve)
             b.set(CaptureRequest.TONEMAP_MODE, CameraMetadata.TONEMAP_MODE_CONTRAST_CURVE)
             b.set(CaptureRequest.TONEMAP_CURVE, TonemapCurve(pts, pts, pts))

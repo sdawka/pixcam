@@ -50,8 +50,17 @@ Stage 2 (in progress) — our own RAW develop:
   → per-shot color matrix → Hable filmic curve → sRGB, with the active 3D LUT
   applied on top. CFA-order-agnostic (RGGB/GRBG/GBRG/BGGR), validated by
   instrumented tests against a CPU reference (`RawDevelopTest`).
-- Still to come: the GLES-graded WYSIWYG viewfinder on binned RAW, and our own
-  tone/color decisions replacing the HAL's per-shot CCM.
+- Our own color science: DNG 1.4 forward-matrix path (dual-illuminant CCT
+  interpolation via self-consistent mired iteration, Bradford D50→D65, XYZ→sRGB)
+  computed from the static calibration matrices + per-shot neutral point —
+  the HAL's per-shot color correction is only a fallback now.
+- WYSIWYG viewfinder: a "View: WYSIWYG" toggle pushes a LINEAR tone curve to
+  the preview stream and applies the develop pipeline's exact Hable + sRGB
+  grade in the GL shader, so the viewfinder matches our developed output
+  (gated on `TONEMAP_MODE_CONTRAST_CURVE`; the emulator and UMIDIGI lack it —
+  needs a Pixel).
+- Still to come: binned-RAW preview develop, and our own AWB replacing the
+  HAL's neutral-point estimate.
 
 ## Roadmap
 

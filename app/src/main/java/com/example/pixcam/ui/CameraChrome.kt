@@ -216,6 +216,22 @@ fun ProControlsPanel(
                 }
             }
 
+            if (info.toneCurveSupported) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("View", color = PixDim, style = MaterialTheme.typography.bodySmall)
+                    Chip(label = "HAL", active = !controls.grade, enabled = true) {
+                        push(controls.copy(grade = false))
+                    }
+                    // linear curve to the HAL + our filmic in GL = viewfinder matches our develop
+                    Chip(label = "WYSIWYG", active = controls.grade, enabled = true) {
+                        push(controls.copy(grade = true))
+                    }
+                }
+            }
+
             // GPU LUT — works on any hardware, unlike the HAL tone curve above
             Row(
                 modifier = Modifier.horizontalScroll(rememberScrollState()),

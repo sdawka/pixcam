@@ -50,17 +50,18 @@ fun CameraScreen(controller: CameraController) {
     var activeLutEntry by remember { mutableStateOf<LutEntry?>(null) }
     val notices = rememberNoticeState()
 
-    fun push(new: ManualControls) {
-        controls = new
-        controller.updateControls(new)
-    }
-
     val preview = controller.info.previewSize
     val glView = remember {
         LutSurfaceView(context).apply {
             setBufferSize(preview.width, preview.height)
             onCameraSurfaceReady = { surface -> controller.start(surface) }
         }
+    }
+
+    fun push(new: ManualControls) {
+        if (new.grade != controls.grade) glView.setGrade(new.grade)
+        controls = new
+        controller.updateControls(new)
     }
 
     fun selectLut(entry: LutEntry?) {
