@@ -5,7 +5,7 @@ multi-frame computational processing, watercolor noise reduction, halo
 sharpening, and aggressive tone curves. pixcam goes as close to the sensor as
 Android allows (Camera2, `RAW_SENSOR`) and owns everything after it.
 
-## Status: Stage 0 done, Stage 1 started
+## Status: Stage 0 done, Stages 1–2 started
 
 Capture core:
 
@@ -41,6 +41,17 @@ Stage 1 (in progress):
   LUT baked in offscreen (EGL pbuffer, CPU trilinear fallback) with EXIF
   carried over; DNGs stay raw by design — the LUT is a preview/develop look,
   applied for real in Stage 2.
+
+Stage 2 (in progress) — our own RAW develop:
+
+- Every RAW capture saves the DNG plus a JPEG developed by our own GPU
+  pipeline (single GLES3 pass): black level (dynamic per-frame when the HAL
+  reports it) → lens shading map → white balance → Malvar-He-Cutler demosaic
+  → per-shot color matrix → Hable filmic curve → sRGB, with the active 3D LUT
+  applied on top. CFA-order-agnostic (RGGB/GRBG/GBRG/BGGR), validated by
+  instrumented tests against a CPU reference (`RawDevelopTest`).
+- Still to come: the GLES-graded WYSIWYG viewfinder on binned RAW, and our own
+  tone/color decisions replacing the HAL's per-shot CCM.
 
 ## Roadmap
 

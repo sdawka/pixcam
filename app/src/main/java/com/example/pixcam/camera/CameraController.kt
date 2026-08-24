@@ -24,9 +24,14 @@ import android.provider.MediaStore
 import android.util.Log
 import android.util.Range
 import android.util.Size
+import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.view.Surface
 import com.example.pixcam.gl.LutStillProcessor
 import com.example.pixcam.lut.CubeLut
+import com.example.pixcam.raw.DevelopParamsExtractor
+import com.example.pixcam.raw.RawDeveloper
+import java.nio.ByteOrder
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.text.SimpleDateFormat
@@ -406,7 +411,57 @@ class CameraController(private val context: Context) {
             resolver.delete(uri, null, null)
             throw e
         }
+        if (raw && developRaw(image, result, stamp)) return "$name +jpg"
         return name
+    }
+
+    /** Stage 2: our own develop. The DNG stays the source of truth; this JPEG is our render. */
+    private fun developRaw(image: Image, result: TotalCaptureResult, stamp: String): Boolean {
+        val params = DevelopParamsExtractor.extract(characteristics, result, image.width, image.height)
+            ?: return false
+        val plane = image.planes[0]
+        val bb = plane.buffer
+        bb.rewind() // DngCreator may have consumed the buffer
+        val sb = bb.order(ByteOrder.nativeOrder()).asShortBuffer()
+        val rowShorts = plane.rowStride / 2
+        val shorts = ShortArray(params.width * params.height)
+        for (y in 0 until params.height) {
+            sb.position(y * rowShorts)
+            sb.get(shorts, y * params.width, params.width)
+        }
+        var bitmap = RawDeveloper.develop(shorts, params, stillLut) ?: return false
+        return try {
+            // developed pixels are sensor-oriented; bake the mounting rotation in
+            val orientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            if (orientation != 0) {
+                val m = Matrix().apply { postRotate(orientation.toFloat()) }
+                val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, m, false)
+                bitmap.recycle()
+                bitmap = rotated
+            }
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, "PIX_$stamp.jpg")
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Pixcam")
+            }
+            val resolver = context.contentResolver
+            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                ?: return false
+            try {
+                resolver.openOutputStream(uri)!!.use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                }
+                true
+            } catch (e: Exception) {
+                resolver.delete(uri, null, null)
+                throw e
+            }
+        } catch (e: Exception) {
+            Log.w("pixcam", "develop failed", e)
+            false
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     // UI is locked to portrait, so orientation depends only on the sensor mounting
