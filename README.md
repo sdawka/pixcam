@@ -34,6 +34,13 @@ Stage 1 (in progress):
 - User-selectable tone curves pushed as `TONEMAP_CURVE` to preview and stills:
   Device / Linear / sRGB / Filmic (Hable), gated on the HAL advertising
   `TONEMAP_MODE_CONTRAST_CURVE`.
+- Full 3D LUT support, independent of HAL capabilities: the viewfinder renders
+  through GLES3 (camera → `SurfaceTexture` → OES texture → `sampler3D` with
+  hardware trilinear filtering), with `.cube` import via the system file picker
+  and three built-in looks (Punch / Teal Orange / Mono). JPEG stills get the
+  LUT baked in offscreen (EGL pbuffer, CPU trilinear fallback) with EXIF
+  carried over; DNGs stay raw by design — the LUT is a preview/develop look,
+  applied for real in Stage 2.
 
 ## Roadmap
 

@@ -25,6 +25,8 @@ import android.util.Log
 import android.util.Range
 import android.util.Size
 import android.view.Surface
+import com.example.pixcam.gl.LutStillProcessor
+import com.example.pixcam.lut.CubeLut
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.text.SimpleDateFormat
@@ -97,6 +99,11 @@ class CameraController(private val context: Context) {
     var controls: ManualControls = ManualControls()
         private set
 
+    // The viewfinder applies this LUT on the GPU; stills get it baked in at save
+    // time (JPEG path only — DNGs stay raw by design). Read on the camera thread.
+    @Volatile
+    var stillLut: CubeLut? = null
+
     private fun probe(): CameraInfo {
         val backIds = manager.cameraIdList.filter {
             manager.getCameraCharacteristics(it)
@@ -113,8 +120,9 @@ class CameraController(private val context: Context) {
         val rawSize = if (raw) {
             map.getOutputSizes(ImageFormat.RAW_SENSOR)?.maxByOrNull { it.width.toLong() * it.height }
         } else null
-        val previewSizes = map.getOutputSizes(android.view.SurfaceHolder::class.java)
-            ?: map.getOutputSizes(android.graphics.SurfaceTexture::class.java)!!
+        // preview renders through a SurfaceTexture (GL viewfinder), not a SurfaceHolder
+        val previewSizes = map.getOutputSizes(android.graphics.SurfaceTexture::class.java)
+            ?: map.getOutputSizes(android.view.SurfaceHolder::class.java)!!
         val previewSize = previewSizes
             .filter { it.width <= 1920 && it.height <= 1080 }
             .maxByOrNull { it.width.toLong() * it.height }
@@ -388,8 +396,9 @@ class CameraController(private val context: Context) {
                     }
                 } else {
                     val buf = image.planes[0].buffer
-                    val bytes = ByteArray(buf.remaining())
+                    var bytes = ByteArray(buf.remaining())
                     buf.get(bytes)
+                    stillLut?.let { bytes = LutStillProcessor.process(context, bytes, it) }
                     out.write(bytes)
                 }
             }

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,6 +35,7 @@ import com.example.pixcam.camera.CameraInfo
 import com.example.pixcam.camera.ManualControls
 import com.example.pixcam.camera.ToneCurve
 import com.example.pixcam.gallery.LastShotThumb
+import com.example.pixcam.lut.LutEntry
 import com.example.pixcam.theme.PixAccent
 import com.example.pixcam.theme.PixDim
 import com.example.pixcam.theme.PixOnDark
@@ -139,6 +141,10 @@ fun ProControlsPanel(
     info: CameraInfo,
     controls: ManualControls,
     push: (ManualControls) -> Unit,
+    lutEntries: List<LutEntry>,
+    activeLutId: String?,
+    onSelectLut: (LutEntry?) -> Unit,
+    onImportLut: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     AnimatedVisibility(visible = visible, modifier = modifier) {
@@ -208,6 +214,22 @@ fun ProControlsPanel(
                         )
                     }
                 }
+            }
+
+            // GPU LUT — works on any hardware, unlike the HAL tone curve above
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("LUT", color = PixDim, style = MaterialTheme.typography.bodySmall)
+                Chip(label = "None", active = activeLutId == null, enabled = true) { onSelectLut(null) }
+                lutEntries.forEach { entry ->
+                    Chip(label = entry.name, active = activeLutId == entry.id, enabled = true) {
+                        onSelectLut(entry)
+                    }
+                }
+                Chip(label = "+ .cube", active = false, enabled = true, onClick = onImportLut)
             }
 
             if (info.minFocusDistance > 0f) {

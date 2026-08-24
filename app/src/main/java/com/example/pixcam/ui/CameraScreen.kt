@@ -1,7 +1,7 @@
 package com.example.pixcam.ui
 
-import android.view.SurfaceHolder
-import android.view.SurfaceView
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,15 +20,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.pixcam.camera.CameraController
 import com.example.pixcam.camera.ManualControls
 import com.example.pixcam.gallery.GalleryViewer
+import com.example.pixcam.gl.LutSurfaceView
+import com.example.pixcam.lut.CubeLut
+import com.example.pixcam.lut.LutEntry
+import com.example.pixcam.lut.LutRepository
 import com.example.pixcam.theme.PixBackground
 
 @Composable
 fun CameraScreen(controller: CameraController) {
+    val context = LocalContext.current
     val status by controller.status.collectAsState()
     val saving by controller.saving.collectAsState()
     var controls by remember { mutableStateOf(ManualControls()) }
@@ -37,6 +46,8 @@ fun CameraScreen(controller: CameraController) {
     var shutterCount by remember { mutableIntStateOf(0) }
     var shotCount by remember { mutableIntStateOf(0) }
     var showGallery by remember { mutableStateOf(false) }
+    var lutEntries by remember { mutableStateOf(LutRepository.list(context)) }
+    var activeLutEntry by remember { mutableStateOf<LutEntry?>(null) }
     val notices = rememberNoticeState()
 
     fun push(new: ManualControls) {
@@ -44,8 +55,61 @@ fun CameraScreen(controller: CameraController) {
         controller.updateControls(new)
     }
 
-    DisposableEffect(Unit) {
-        onDispose { controller.stop() }
+    val preview = controller.info.previewSize
+    val glView = remember {
+        LutSurfaceView(context).apply {
+            setBufferSize(preview.width, preview.height)
+            onCameraSurfaceReady = { surface -> controller.start(surface) }
+        }
+    }
+
+    fun selectLut(entry: LutEntry?) {
+        val cube: CubeLut? = entry?.let {
+            try {
+                LutRepository.load(context, it)
+            } catch (e: Exception) {
+                notices.show("LUT failed: ${e.message}")
+                return
+            }
+        }
+        activeLutEntry = entry
+        glView.setLut(cube)
+        controller.stillLut = cube
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        try {
+            val entry = LutRepository.import(context, uri)
+            lutEntries = LutRepository.list(context)
+            selectLut(entry)
+            notices.show("Imported ${entry.name}")
+        } catch (e: Exception) {
+            notices.show("Import failed: ${e.message}")
+        }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                // resume recreates the GL surface, which re-delivers the camera
+                // surface via onCameraSurfaceReady and restarts the camera
+                Lifecycle.Event.ON_RESUME -> glView.onResume()
+                Lifecycle.Event.ON_PAUSE -> {
+                    controller.stop()
+                    glView.onPause()
+                }
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            controller.stop()
+        }
     }
 
     Box(Modifier.fillMaxSize().background(PixBackground)) {
@@ -63,7 +127,6 @@ fun CameraScreen(controller: CameraController) {
                 onInfo = { infoOpen = true },
             )
 
-            val preview = controller.info.previewSize
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -77,16 +140,7 @@ fun CameraScreen(controller: CameraController) {
                 ) {
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),
-                        factory = { ctx ->
-                            SurfaceView(ctx).apply {
-                                holder.setFixedSize(preview.width, preview.height)
-                                holder.addCallback(object : SurfaceHolder.Callback {
-                                    override fun surfaceCreated(h: SurfaceHolder) = controller.start(h.surface)
-                                    override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, hh: Int) {}
-                                    override fun surfaceDestroyed(h: SurfaceHolder) = controller.stop()
-                                })
-                            }
-                        },
+                        factory = { glView },
                     )
                 }
 
@@ -104,6 +158,10 @@ fun CameraScreen(controller: CameraController) {
                     info = controller.info,
                     controls = controls,
                     push = ::push,
+                    lutEntries = lutEntries,
+                    activeLutId = activeLutEntry?.id,
+                    onSelectLut = ::selectLut,
+                    onImportLut = { importLauncher.launch(arrayOf("*/*")) },
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
             }
